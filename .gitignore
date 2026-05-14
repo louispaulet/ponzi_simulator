@@ -203,6 +203,11 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Node / Vite
+node_modules/
+.vite.pid
+.vite.log
+
 # Ruff stuff:
 .ruff_cache/
 
