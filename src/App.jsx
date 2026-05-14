@@ -54,7 +54,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [running, scenario.mode, state.ended]);
 
-  const rows = levelRows(state).slice(-8);
+  const rows = levelRows(state);
   const latestEvent = state.endReason ?? state.events[0];
 
   return (
@@ -153,6 +153,8 @@ export default function App() {
               <Metric label="Paid out" value={`$${compact(state.totalPaidOut)}`} />
               <Metric label="Reserves" value={`$${compact(state.reserves)}`} />
               <Metric label="Unpaid" value={`$${compact(state.unpaidLiabilities)}`} danger={state.unpaidLiabilities > 0} />
+              <Metric label="Claimed" value={`$${compact(state.claimedAccountValue)}`} />
+              <Metric label="Distress" value={`${state.distressMonths} mo`} danger={state.distressMonths >= 4} />
             </div>
             <div className="mt-4 h-3 bg-slate-200">
               <div

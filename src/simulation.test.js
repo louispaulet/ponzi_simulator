@@ -102,4 +102,18 @@ describe('ponzi simulation', () => {
       expect(scenario.seed).toBeGreaterThan(0);
     });
   });
+
+  it('historical watch scenarios fail from collapse dynamics instead of just reaching the horizon', () => {
+    scenarios
+      .filter((scenario) => scenario.mode === 'watch')
+      .forEach((scenario) => {
+        const states = runSimulation(scenario, 120);
+        const final = states.at(-1);
+        const maxRisk = Math.max(...states.map((state) => state.collapseRisk));
+
+        expect(final.endReason).not.toBe('Scenario horizon reached');
+        expect(maxRisk).toBeGreaterThan(0.75);
+        expect(new Set(states.map((state) => state.collapseRisk.toFixed(2))).size).toBeGreaterThan(4);
+      });
+  });
 });

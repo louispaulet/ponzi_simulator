@@ -36,8 +36,11 @@ export function createInitialState(config = {}) {
     reserves: merged.initialReserve,
     totalInflow: 0,
     totalPaidOut: 0,
+    claimedAccountValue: merged.initialReserve,
     unpaidLiabilities: 0,
     stress: 0,
+    distressMonths: 0,
+    recruitingMomentum: 1,
     collapseRisk: 0,
     lastNewParticipants: 0,
     ended: false,
@@ -91,29 +94,53 @@ export function stepSimulation(previous, rng = Math.random) {
   const maxAvailable = Math.max(0, config.worldPopulation - previous.totalJoined);
   newParticipants = Math.min(newParticipants, maxAvailable);
 
+  const recruitingMomentum =
+    previous.lastNewParticipants > 0 ? newParticipants / previous.lastNewParticipants : newParticipants > 0 ? 1 : 0;
+  const growthSlowdown = previous.month > 2 ? Math.max(0, 1 - recruitingMomentum) : 0;
+  const saturationPressure = Math.min(1, Math.pow(marketSaturation * 9, 1.35));
+  const confidencePressure = Math.min(1, previous.stress + growthSlowdown * 0.55 + saturationPressure * 0.35);
+  const requestedWithdrawalRate = Math.min(
+    0.88,
+    config.withdrawalRate * (1 + confidencePressure * 6 + previous.distressMonths * 0.2),
+  );
+  const statedValueBeforeWithdrawals =
+    previous.claimedAccountValue * (1 + config.promisedReturnMonthly) + newParticipants * config.monthlyContribution;
   const promisedPayout =
-    activePopulation *
-    config.monthlyContribution *
-    config.promisedReturnMonthly *
-    (1 + previous.stress);
-  const withdrawals =
-    activePopulation *
-    config.monthlyContribution *
-    config.withdrawalRate *
-    (1 + previous.stress * 1.8);
+    previous.claimedAccountValue * config.promisedReturnMonthly * (0.25 + confidencePressure * 0.75);
+  const withdrawals = statedValueBeforeWithdrawals * requestedWithdrawalRate;
   const inflow = newParticipants * config.monthlyContribution;
   const due = promisedPayout + withdrawals;
   const available = previous.reserves + inflow;
   const paidOut = Math.min(available, due);
   const shortfall = Math.max(0, due - available);
   const reserves = Math.max(0, available - due);
+  const claimedAccountValue = Math.max(0, statedValueBeforeWithdrawals - paidOut);
+  const cashCoverage = available / Math.max(due, 1);
+  const distressSignal =
+    shortfall > 0 ||
+    growthSlowdown > 0.35 ||
+    saturationPressure > 0.2 ||
+    cashCoverage < 1.15 ||
+    requestedWithdrawalRate > config.withdrawalRate * 2.2;
+  const distressMonths = distressSignal ? previous.distressMonths + 1 : Math.max(0, previous.distressMonths - 1);
   const stress = Math.min(
     1,
-    previous.stress * 0.7 +
-      shortfall / Math.max(due, 1) * 0.65 +
-      (newParticipants < activePopulation * 0.35 ? 0.12 : 0),
+    previous.stress * 0.58 +
+      shortfall / Math.max(due, 1) * 0.72 +
+      growthSlowdown * 0.28 +
+      saturationPressure * 0.22 +
+      distressMonths * 0.045,
   );
-  const collapseRisk = Math.min(1, stress + shortfall / Math.max(config.monthlyContribution * 1000, 1));
+  const liabilityPressure = Math.min(1, claimedAccountValue / Math.max(previous.totalInflow + inflow + reserves, 1));
+  const collapseRisk = Math.min(
+    1,
+    stress * 0.62 +
+      liabilityPressure * 0.18 +
+      growthSlowdown * 0.22 +
+      saturationPressure * 0.22 +
+      distressMonths * 0.055 +
+      shortfall / Math.max(config.monthlyContribution * 700, 1),
+  );
   const churnRate = Math.min(0.72, stress * config.churnSensitivity + shortfall / Math.max(due, 1) * 0.35);
   const retainedActiveLevels = activeLevels.map((count) => Math.max(0, Math.floor(count * (1 - churnRate))));
 
@@ -136,8 +163,11 @@ export function stepSimulation(previous, rng = Math.random) {
     reserves,
     totalInflow: previous.totalInflow + inflow,
     totalPaidOut: previous.totalPaidOut + paidOut,
+    claimedAccountValue,
     unpaidLiabilities: previous.unpaidLiabilities + shortfall,
     stress,
+    distressMonths,
+    recruitingMomentum,
     collapseRisk,
     lastNewParticipants: newParticipants,
     events: buildEvents(previous, {
@@ -146,6 +176,8 @@ export function stepSimulation(previous, rng = Math.random) {
       shortfall,
       stress,
       churnRate,
+      growthSlowdown,
+      requestedWithdrawalRate,
       inflow,
       due,
     }),
@@ -197,7 +229,10 @@ function applyEndConditions(state) {
   if (state.month > 1 && state.activePopulation === 0 && state.unpaidLiabilities > 0) {
     return end(state, 'Scheme collapse', 'Every active participant has left while unpaid obligations remain.');
   }
-  if (state.month > 3 && state.stress > 0.92 && state.lastNewParticipants < state.activePopulation * 0.12) {
+  if (state.month > 3 && state.collapseRisk > 0.92 && state.unpaidLiabilities > 0) {
+    return end(state, 'Scheme collapse', 'The cash shortfall becomes visible and redemption requests overwhelm inflows.');
+  }
+  if (state.month > 5 && state.distressMonths >= 5 && state.collapseRisk > 0.78) {
     return end(state, 'Scheme collapse', 'Recruiting can no longer cover promised payouts, triggering exits.');
   }
   if (state.month >= config.maxMonths) {
@@ -228,6 +263,12 @@ function buildEvents(previous, metrics) {
   }
   if (metrics.churnRate > 0.25) {
     events.push('Large cohorts leave after missed or delayed payouts.');
+  }
+  if (metrics.growthSlowdown > 0.35) {
+    events.push('Recruiting momentum slows and confidence starts to crack.');
+  }
+  if (metrics.requestedWithdrawalRate > previous.config.withdrawalRate * 2.2) {
+    events.push('More participants try to cash out instead of rolling balances forward.');
   }
   if (metrics.inflow > metrics.due && metrics.newParticipants > 0) {
     events.push('New money temporarily hides the insolvency.');

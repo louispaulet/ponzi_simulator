@@ -49,7 +49,7 @@ class PonziScene extends Phaser.Scene {
     this.labels.clear(true, true);
 
     const { width, height } = this.scale;
-    const rows = levelRows(this.snapshot).slice(0, 10);
+    const rows = visibleTreeRows(levelRows(this.snapshot), 12);
     const maxCount = Math.max(...rows.map((row) => row.count), 1);
     const baseY = 94;
     const rowGap = Math.min(58, (height - 150) / Math.max(rows.length, 1));
@@ -57,6 +57,18 @@ class PonziScene extends Phaser.Scene {
 
     rows.forEach((row, index) => {
       const y = baseY + index * rowGap;
+      if (row.type === 'gap') {
+        this.graphics.lineStyle(2, 0x94a3b8, 0.28);
+        this.graphics.lineBetween(centerX, y - 18, centerX, y + 18);
+        this.labels.add(
+          this.add.text(centerX - 72, y - 10, `${row.hiddenCount} levels compressed`, {
+            color: '#cbd5e1',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: '13px',
+          }),
+        );
+        return;
+      }
       const radius = Math.max(9, Math.min(31, 8 + Math.sqrt(row.count / maxCount) * 28));
       const spread = Math.min(width * 0.82, 100 + Math.log10(row.count + 1) * 180);
       const nodes = Math.min(13, Math.max(1, Math.ceil(Math.log2(row.count + 1))));
@@ -144,4 +156,20 @@ export default function PonziGame({ snapshot }) {
 
 function format(value) {
   return Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function visibleTreeRows(rows, maxRows) {
+  if (rows.length <= maxRows) return rows;
+  const newestCount = maxRows - 2;
+  return [
+    rows[0],
+    {
+      type: 'gap',
+      level: 'gap',
+      count: 0,
+      cumulative: rows.at(-newestCount).cumulative,
+      hiddenCount: rows.length - newestCount - 1,
+    },
+    ...rows.slice(-newestCount),
+  ];
 }

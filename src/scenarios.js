@@ -26,7 +26,7 @@ export const scenarios = [
     withdrawalRate: 0.11,
     churnSensitivity: 0.42,
     initialReserve: 8_000,
-    maxMonths: 14,
+    maxMonths: 18,
     seed: 1920,
     recruitmentDecay: 0.82,
   },
