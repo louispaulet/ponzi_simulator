@@ -12,7 +12,7 @@ up:
 		screen -dmS $(SCREEN_NAME) sh -c 'cd "$(CURDIR)" && ./node_modules/.bin/vite --host 0.0.0.0 > .vite.log 2>&1'; \
 		sleep 1; \
 		pgrep -f "node ./node_modules/.bin/vite --host 0.0.0.0" | head -n 1 > $(PID_FILE); \
-		echo "Vite started at http://localhost:5173/ponzi_simulator/"; \
+		echo "Vite started at http://localhost:5173/"; \
 	fi
 
 kill:
