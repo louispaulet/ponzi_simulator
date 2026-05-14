@@ -26,17 +26,22 @@ export function drawRecruitCount(target, rng = Math.random, spread = 0.55) {
 
 export function createInitialState(config = {}) {
   const merged = normalizeConfig(config);
+  const levels = merged.initialLevels.length > 0 ? [...merged.initialLevels] : [merged.initialParticipants];
+  const activeLevels =
+    merged.initialActiveLevels.length > 0 ? [...merged.initialActiveLevels] : [levels[levels.length - 1] ?? 1];
+  const totalJoined = levels.reduce((sum, count) => sum + count, 0);
+  const activePopulation = activeLevels.reduce((sum, count) => sum + count, 0);
   return {
     config: merged,
     month: 0,
-    levels: [1],
-    activeLevels: [1],
-    totalJoined: 1,
-    activePopulation: 1,
+    levels,
+    activeLevels,
+    totalJoined,
+    activePopulation,
     reserves: merged.initialReserve,
-    totalInflow: 0,
+    totalInflow: merged.initialTotalInflow,
     totalPaidOut: 0,
-    claimedAccountValue: merged.initialReserve,
+    claimedAccountValue: merged.initialClaimedAccountValue,
     unpaidLiabilities: 0,
     stress: 0,
     distressMonths: 0,
@@ -59,9 +64,17 @@ export function normalizeConfig(config = {}) {
     withdrawalRate: Number(config.withdrawalRate ?? 0.08),
     churnSensitivity: Number(config.churnSensitivity ?? 0.3),
     initialReserve: Number(config.initialReserve ?? 0),
+    initialParticipants: Number(config.initialParticipants ?? 1),
+    initialLevels: Array.isArray(config.initialLevels) ? config.initialLevels.map(Number) : [],
+    initialActiveLevels: Array.isArray(config.initialActiveLevels) ? config.initialActiveLevels.map(Number) : [],
+    initialTotalInflow: Number(config.initialTotalInflow ?? 0),
+    initialClaimedAccountValue: Number(
+      config.initialClaimedAccountValue ?? config.initialReserve ?? config.initialTotalInflow ?? 0,
+    ),
     maxMonths: Number(config.maxMonths ?? 84),
     seed: Number(config.seed ?? 7),
     recruitmentDecay: Number(config.recruitmentDecay ?? 0.97),
+    saturationMultiplier: Number(config.saturationMultiplier ?? 9),
     worldPopulation: Number(config.worldPopulation ?? DEFAULT_LIMITS.worldPopulation),
     globalMoneyCap: Number(config.globalMoneyCap ?? DEFAULT_LIMITS.globalMoneyCap),
     maxLevels: Number(config.maxLevels ?? DEFAULT_LIMITS.maxLevels),
@@ -97,7 +110,7 @@ export function stepSimulation(previous, rng = Math.random) {
   const recruitingMomentum =
     previous.lastNewParticipants > 0 ? newParticipants / previous.lastNewParticipants : newParticipants > 0 ? 1 : 0;
   const growthSlowdown = previous.month > 2 ? Math.max(0, 1 - recruitingMomentum) : 0;
-  const saturationPressure = Math.min(1, Math.pow(marketSaturation * 9, 1.35));
+  const saturationPressure = Math.min(1, Math.pow(marketSaturation * config.saturationMultiplier, 1.35));
   const confidencePressure = Math.min(1, previous.stress + growthSlowdown * 0.55 + saturationPressure * 0.35);
   const requestedWithdrawalRate = Math.min(
     0.88,
@@ -139,7 +152,7 @@ export function stepSimulation(previous, rng = Math.random) {
       growthSlowdown * 0.22 +
       saturationPressure * 0.22 +
       distressMonths * 0.055 +
-      shortfall / Math.max(config.monthlyContribution * 700, 1),
+      shortfall / Math.max(claimedAccountValue, config.monthlyContribution * 700, 1),
   );
   const churnRate = Math.min(0.72, stress * config.churnSensitivity + shortfall / Math.max(due, 1) * 0.35);
   const retainedActiveLevels = activeLevels.map((count) => Math.max(0, Math.floor(count * (1 - churnRate))));

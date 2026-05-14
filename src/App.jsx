@@ -116,7 +116,7 @@ export default function App() {
             />
             {scenario.mode === 'watch' ? (
               <p className="mt-3 border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Historical scenarios are watch-only so the preset assumptions stay intact.
+                Historical scenarios are simplified scale models, not forensic accounting records.
               </p>
             ) : null}
           </Panel>

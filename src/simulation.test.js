@@ -30,6 +30,21 @@ describe('ponzi simulation', () => {
     ]);
   });
 
+  it('can start a historical scenario from a mature known scale', () => {
+    const initial = createInitialState({
+      initialLevels: [1, 4_800],
+      initialActiveLevels: [4_800],
+      initialTotalInflow: 19_500_000_000,
+      initialClaimedAccountValue: 64_800_000_000,
+      initialReserve: 1_000_000_000,
+    });
+
+    expect(initial.totalJoined).toBe(4_801);
+    expect(initial.activePopulation).toBe(4_800);
+    expect(initial.totalInflow).toBe(19_500_000_000);
+    expect(initial.claimedAccountValue).toBe(64_800_000_000);
+  });
+
   it('updates inflow and payout liabilities after one month', () => {
     const rng = createRng(4);
     const initial = createInitialState({
@@ -110,10 +125,22 @@ describe('ponzi simulation', () => {
         const states = runSimulation(scenario, 120);
         const final = states.at(-1);
         const maxRisk = Math.max(...states.map((state) => state.collapseRisk));
+        const distinctRiskScores = new Set(states.map((state) => state.collapseRisk.toFixed(2)));
 
         expect(final.endReason).not.toBe('Scenario horizon reached');
         expect(maxRisk).toBeGreaterThan(0.75);
-        expect(new Set(states.map((state) => state.collapseRisk.toFixed(2))).size).toBeGreaterThan(4);
+        expect(distinctRiskScores.size).toBeGreaterThan(2);
+        expect([...distinctRiskScores]).not.toEqual(['0.40']);
       });
+  });
+
+  it('keeps the Madoff scenario in historical billions, not synthetic trillions', () => {
+    const madoff = scenarios.find((scenario) => scenario.id === 'madoff');
+    const final = runSimulation(madoff, 24).at(-1);
+
+    expect(final.endReason).toBe('Scheme collapse');
+    expect(final.totalInflow).toBeLessThan(30_000_000_000);
+    expect(final.claimedAccountValue).toBeLessThan(90_000_000_000);
+    expect(final.totalJoined).toBeLessThanOrEqual(40_930);
   });
 });
