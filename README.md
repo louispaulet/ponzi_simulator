@@ -1,3 +1,5 @@
+![Ponzi Simulator](docs/readme-assets/ponzi-simulator-readme.webp)
+
 # Ponzi Simulator
 
 Ponzi Simulator is an educational Vite + React + Tailwind CSS app with a Phaser-powered game canvas. It models how recruitment-driven fraud appears to work early, then collapses when new money cannot cover promised returns and withdrawals.
