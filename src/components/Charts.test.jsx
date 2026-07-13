@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRecruitmentTree } from './Charts.jsx';
+import { buildRecruitmentTree } from '../recruitmentTree.js';
 
 function snapshotWithCohorts(count) {
   return {
