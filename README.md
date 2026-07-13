@@ -19,7 +19,7 @@ Open `http://localhost:5173/`.
 npm run test           # unit and component tests
 npm run test:coverage  # tests with coverage thresholds
 npm run test:e2e       # Chromium, Firefox, and WebKit browser tests
-npm run build          # production build plus deep-route fallback
+npm run build          # production build plus 200-status route entries and fallback
 npm run check          # complete release gate
 npm run deploy         # gate, then publish dist to GitHub Pages
 ```
