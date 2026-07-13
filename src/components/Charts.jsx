@@ -8,48 +8,169 @@ const chartColors = {
   ink: '#16203a',
 };
 
-export function GrowthChart({ history, currentIndex }) {
+const MAX_TREE_LEVELS = 10;
+const MAX_NODES_PER_LEVEL = 5;
+
+function groupCohorts(cohorts, maxLevels) {
+  if (cohorts.length <= maxLevels) return cohorts.map((cohort) => [cohort]);
+
+  const groupCount = maxLevels - 1;
+  const remaining = cohorts.length - 1;
+  return [
+    [cohorts[0]],
+    ...Array.from({ length: groupCount }, (_, index) => {
+      const start = 1 + Math.floor((index * remaining) / groupCount);
+      const end = 1 + Math.floor(((index + 1) * remaining) / groupCount);
+      return cohorts.slice(start, end);
+    }),
+  ];
+}
+
+function splitPeople(total, nodeCount) {
+  const base = Math.floor(total / nodeCount);
+  const remainder = total % nodeCount;
+  return Array.from({ length: nodeCount }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function representativeNodeCount(people, maxNodes) {
+  if (people <= 1) return 1;
+  if (people < 10) return Math.min(2, people, maxNodes);
+  if (people < 100) return Math.min(3, people, maxNodes);
+  if (people < 1_000) return Math.min(4, people, maxNodes);
+  return Math.min(5, people, maxNodes);
+}
+
+export function buildRecruitmentTree(snapshot, maxLevels = MAX_TREE_LEVELS, maxNodes = MAX_NODES_PER_LEVEL) {
+  const cohortGroups = groupCohorts(snapshot.cohorts, maxLevels);
+  return cohortGroups.map((group, levelIndex) => {
+    const joined = group.reduce((sum, cohort) => sum + cohort.joined, 0);
+    const active = group.reduce((sum, cohort) => sum + cohort.active, 0);
+    const nodeCount = levelIndex === 0 ? 1 : representativeNodeCount(joined, maxNodes);
+    const joinedByNode = splitPeople(joined, nodeCount);
+    const activeByNode = splitPeople(active, nodeCount);
+    return {
+      id: `${group[0].period}-${group.at(-1).period}`,
+      periodStart: group[0].period,
+      periodEnd: group.at(-1).period,
+      joined,
+      active,
+      collapsedCohorts: group.length,
+      nodes: joinedByNode.map((people, nodeIndex) => ({
+        id: `${group[0].period}-${group.at(-1).period}-${nodeIndex}`,
+        people,
+        active: activeByNode[nodeIndex],
+      })),
+    };
+  });
+}
+
+function positionedTree(snapshot) {
+  const width = 720;
+  const top = 58;
+  const gap = 74;
+  const levels = buildRecruitmentTree(snapshot).map((level, levelIndex) => {
+    const minimumWidth = Math.max(0, (level.nodes.length - 1) * 92);
+    const availableWidth = Math.min(width - 130, Math.max(minimumWidth, 120 + levelIndex * 60));
+    return {
+      ...level,
+      y: top + levelIndex * gap,
+      nodes: level.nodes.map((node, nodeIndex) => ({
+        ...node,
+        y: top + levelIndex * gap,
+        x: level.nodes.length === 1
+          ? width / 2
+          : width / 2 - availableWidth / 2 + (nodeIndex / (level.nodes.length - 1)) * availableWidth,
+        radius: 30 + Math.min(8, Math.log10(node.people + 1) * 2.2),
+      })),
+    };
+  });
+  const edges = levels.flatMap((level, levelIndex) => {
+    if (levelIndex === 0) return [];
+    const parents = levels[levelIndex - 1].nodes;
+    return level.nodes.map((node, nodeIndex) => {
+      const parentIndex = level.nodes.length === 1
+        ? Math.floor((parents.length - 1) / 2)
+        : Math.round((nodeIndex / (level.nodes.length - 1)) * Math.max(0, parents.length - 1));
+      const parent = parents[parentIndex];
+      const startY = node.y - node.radius;
+      const endY = parent.y + parent.radius;
+      const controlOffset = Math.max(18, (startY - endY) * 0.46);
+      return {
+        id: `${parent.id}-${node.id}`,
+        path: `M ${node.x} ${startY} C ${node.x} ${startY - controlOffset}, ${parent.x} ${endY + controlOffset}, ${parent.x} ${endY}`,
+      };
+    });
+  });
+  return { width, height: top + Math.max(1, levels.length - 1) * gap + 72, levels, edges };
+}
+
+export function RecruitmentTree({ history, currentIndex }) {
   const states = history.slice(0, currentIndex + 1);
-  const width = 800;
-  const height = 260;
-  const padding = { left: 54, right: 18, top: 20, bottom: 38 };
-  const maxLog = Math.max(1, ...states.map((state) => Math.log10(state.totalJoined + 1)));
-  const pointFor = (state, index, key) => {
-    const x = padding.left + (index / Math.max(states.length - 1, 1)) * (width - padding.left - padding.right);
-    const y = height - padding.bottom - (Math.log10(state[key] + 1) / maxLog) * (height - padding.top - padding.bottom);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  };
-  const joinedPoints = states.map((state, index) => pointFor(state, index, 'totalJoined')).join(' ');
-  const activePoints = states.map((state, index) => pointFor(state, index, 'activeParticipants')).join(' ');
   const latest = states.at(-1);
+  const tree = positionedTree(latest);
+  const isCompressed = latest.cohorts.length > MAX_TREE_LEVELS;
+  const periodFlow = latest.periodLedger.operatorTake + latest.periodLedger.commissionsPaid;
 
   return (
-    <section className="data-card chart-card" aria-labelledby="growth-chart-heading">
+    <section className="data-card chart-card recruitment-tree-card" aria-labelledby="recruitment-tree-heading">
       <div className="card-heading-row">
         <div>
-          <p className="card-kicker">Recruitment pressure</p>
-          <h2 id="growth-chart-heading">Participant growth</h2>
+          <p className="card-kicker">People join. Money moves up.</p>
+          <h2 id="recruitment-tree-heading">The recruitment tree</h2>
         </div>
-        <span className="subtle-badge">Log scale</span>
+        <span className="subtle-badge">{tree.levels.length} visible {tree.levels.length === 1 ? 'level' : 'levels'} · max 10</span>
       </div>
-      <div className="chart-legend" aria-hidden="true">
-        <span><i style={{ background: chartColors.joined }} />Joined {compact(latest.totalJoined)}</span>
-        <span><i style={{ background: chartColors.active }} />Active {compact(latest.activeParticipants)}</span>
+      <div className="tree-legend" aria-hidden="true">
+        <span><i className="tree-legend-joined" />Joined {compact(latest.totalJoined)}</span>
+        <span><i className="tree-legend-active" />Active {compact(latest.activeParticipants)}</span>
+        <span><i className="tree-legend-money" />Moved upward {currency(latest.moneyMovedToTop)}</span>
       </div>
-      <svg className="line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="growth-title growth-description">
-        <title id="growth-title">Joined and active participants over time</title>
-        <desc id="growth-description">At period {latest.period}, {integer(latest.totalJoined)} people have joined and {integer(latest.activeParticipants)} remain active. Values use a logarithmic scale.</desc>
-        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
-          const y = padding.top + fraction * (height - padding.top - padding.bottom);
-          return <line key={fraction} x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-gridline" />;
-        })}
-        <line x1={padding.left} x2={padding.left} y1={padding.top} y2={height - padding.bottom} className="chart-axis" />
-        <line x1={padding.left} x2={width - padding.right} y1={height - padding.bottom} y2={height - padding.bottom} className="chart-axis" />
-        <polyline points={joinedPoints} fill="none" stroke={chartColors.joined} strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" />
-        <polyline points={activePoints} fill="none" stroke={chartColors.active} strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
-        <text x={padding.left} y={height - 12} className="chart-label">Start</text>
-        <text x={width - padding.right} y={height - 12} textAnchor="end" className="chart-label">Period {latest.period}</text>
-      </svg>
+      <div className="recruitment-tree-scroll">
+        <svg className="recruitment-tree" viewBox={`0 0 ${tree.width} ${tree.height}`} role="img" aria-labelledby="recruitment-tree-title recruitment-tree-description">
+          <title id="recruitment-tree-title">Recruitment tree at period {latest.period}</title>
+          <desc id="recruitment-tree-description">
+            {integer(latest.totalJoined)} people are represented across {tree.levels.length} visible levels. Each bubble is labeled with the number of people grouped inside it. {isCompressed ? `${latest.cohorts.length} modeled cohort levels are compressed to a 10-level view.` : ''} Amber pulses show modeled money moving upward.
+          </desc>
+          <g className="tree-connections" aria-hidden="true">
+            {tree.edges.map((edge) => <path key={edge.id} d={edge.path} />)}
+          </g>
+          {periodFlow > 0 ? (
+            <g className="tree-money-flow" aria-hidden="true">
+              {tree.edges.map((edge, index) => (
+                <g key={edge.id}>
+                  <path className="tree-money-trail" d={edge.path} />
+                  <circle className="tree-money-pulse" r="3.5">
+                    <animateMotion path={edge.path} dur={`${1.8 + (index % 4) * 0.22}s`} begin={`${-(index % 7) * 0.24}s`} repeatCount="indefinite" />
+                  </circle>
+                </g>
+              ))}
+            </g>
+          ) : null}
+          {tree.levels.map((level, levelIndex) => (
+            <g className="tree-level" key={level.id}>
+              <text className="tree-level-label" x="24" y={level.y + 4}>
+                {level.periodStart === level.periodEnd ? `P${level.periodStart}` : `P${level.periodStart}–${level.periodEnd}`}
+              </text>
+              {level.nodes.map((node) => {
+                const activeShare = node.active / Math.max(node.people, 1);
+                const tone = activeShare < 0.35 ? 'is-stressed' : levelIndex === tree.levels.length - 1 ? 'is-new' : 'is-active';
+                return (
+                  <g className={`tree-node ${tone}`} key={node.id} transform={`translate(${node.x} ${level.y})`}>
+                    <title>{integer(node.people)} {node.people === 1 ? 'person' : 'people'} grouped in this bubble; {integer(node.active)} remain active.</title>
+                    <circle r={node.radius} />
+                    <text className="tree-node-count" textAnchor="middle" y="-2">{compact(node.people)}</text>
+                    <text className="tree-node-unit" textAnchor="middle" y="13">{node.people === 1 ? 'person' : 'people'}</text>
+                  </g>
+                );
+              })}
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="tree-explainer">
+        <p><strong>How to read it</strong> New participants appear lower in the tree. Every bubble groups the number shown, while amber pulses trace this period’s {currency(periodFlow)} modeled upward flow.</p>
+        {isCompressed ? <span>{latest.cohorts.length} cohort levels compressed into 10 readable levels</span> : <span>One modeled cohort per visible level</span>}
+      </div>
       <details className="data-table-details">
         <summary>View participant data</summary>
         <div className="table-scroll">

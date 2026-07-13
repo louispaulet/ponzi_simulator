@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CashAllocation, EventTimeline, GrowthChart, OutcomeChart, RankDistribution } from '../components/Charts.jsx';
+import { CashAllocation, EventTimeline, OutcomeChart, RankDistribution, RecruitmentTree } from '../components/Charts.jsx';
 import { PageMeta } from '../components/Layout.jsx';
 import { caseById } from '../data/cases.js';
 import { compact, currency, integer, percent } from '../format.js';
@@ -349,7 +349,7 @@ export default function SimulatorPage() {
             ) : null}
 
             <div className="results-grid">
-              <GrowthChart history={history} currentIndex={currentIndex} />
+              <RecruitmentTree history={history} currentIndex={currentIndex} />
               <CashAllocation snapshot={snapshot} />
               <OutcomeChart snapshot={snapshot} />
               {config.kind === SCHEME_KINDS.RECRUITMENT ? <RankDistribution snapshot={snapshot} /> : (

@@ -21,7 +21,7 @@ test('mobile simulator keeps setup, results, and playback usable', async ({ page
   await expect(page.getByRole('tab', { name: 'Setup' })).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('button', { name: 'Step' }).click();
   await expect(page.getByRole('tab', { name: /Results 1/ })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('region', { name: 'Participant growth' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'The recruitment tree' })).toBeVisible();
   await expect(page.getByLabel('Simulation playback controls')).toBeVisible();
   await page.getByRole('tab', { name: 'Setup' }).click();
   await expect(page.getByLabel('Joining fee')).toBeVisible();

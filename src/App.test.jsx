@@ -103,6 +103,8 @@ describe('simulator interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Step' }));
     expect(screen.getByText('1/48')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Results 1/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('heading', { name: 'The recruitment tree' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Recruitment tree at period 1/i })).toBeInTheDocument();
   });
 
   it('switches between discriminated scheme forms', async () => {
