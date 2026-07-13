@@ -1,11 +1,68 @@
-export const DEFAULT_LIMITS = {
-  worldPopulation: 8_100_000_000,
-  globalMoneyCap: 450_000_000_000_000,
-  maxLevels: 16,
+export const SCHEME_KINDS = {
+  INVESTMENT: 'investment-ponzi',
+  RECRUITMENT: 'recruitment-pyramid',
 };
 
+export const DEFAULT_RANKS = [
+  {
+    id: 'bronze',
+    name: 'Bronze',
+    directRecruits: 0,
+    activeDownline: 0,
+    teamVolume: 0,
+    commissionMultiplier: 1,
+    bonus: 0,
+  },
+  {
+    id: 'silver',
+    name: 'Silver',
+    directRecruits: 2,
+    activeDownline: 8,
+    teamVolume: 5_000,
+    commissionMultiplier: 1.08,
+    bonus: 100,
+  },
+  {
+    id: 'gold',
+    name: 'Gold',
+    directRecruits: 4,
+    activeDownline: 40,
+    teamVolume: 25_000,
+    commissionMultiplier: 1.2,
+    bonus: 500,
+  },
+  {
+    id: 'platinum',
+    name: 'Platinum',
+    directRecruits: 6,
+    activeDownline: 180,
+    teamVolume: 100_000,
+    commissionMultiplier: 1.4,
+    bonus: 2_500,
+  },
+];
+
+export const DEFAULT_COMMISSION_RULES = [
+  { id: 'direct-enrollment', trigger: 'enrollment', depth: 1, rate: 0.2, minRank: 'bronze' },
+  { id: 'level-two', trigger: 'enrollment', depth: 2, rate: 0.08, minRank: 'silver' },
+  { id: 'team-purchase', trigger: 'participant-purchase', depth: 1, rate: 0.06, minRank: 'bronze' },
+  { id: 'retail-override', trigger: 'retail-sale', depth: 1, rate: 0.04, minRank: 'silver' },
+];
+
+const ZERO_LEDGER = Object.freeze({
+  participantPayments: 0,
+  retailRevenue: 0,
+  genuineRevenue: 0,
+  commissionsPaid: 0,
+  withdrawalsPaid: 0,
+  refundsPaid: 0,
+  productCosts: 0,
+  operatorTake: 0,
+  unpaidLiabilities: 0,
+});
+
 export function createRng(seed = 1) {
-  let value = seed >>> 0;
+  let value = Number(seed) >>> 0;
   return () => {
     value += 0x6d2b79f5;
     let next = value;
@@ -15,206 +72,401 @@ export function createRng(seed = 1) {
   };
 }
 
-export function drawRecruitCount(target, rng = Math.random, spread = 0.55) {
+export function drawRecruitCount(target, rng = Math.random, spread = 0.28) {
   if (target <= 0) return 0;
   const u1 = Math.max(rng(), Number.EPSILON);
   const u2 = rng();
   const normal = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  const count = Math.round(target + normal * Math.max(0.6, target * spread));
-  return Math.max(0, count);
-}
-
-export function createInitialState(config = {}) {
-  const merged = normalizeConfig(config);
-  const levels = merged.initialLevels.length > 0 ? [...merged.initialLevels] : [merged.initialParticipants];
-  const activeLevels =
-    merged.initialActiveLevels.length > 0 ? [...merged.initialActiveLevels] : [levels[levels.length - 1] ?? 1];
-  const totalJoined = levels.reduce((sum, count) => sum + count, 0);
-  const activePopulation = activeLevels.reduce((sum, count) => sum + count, 0);
-  return {
-    config: merged,
-    month: 0,
-    levels,
-    activeLevels,
-    totalJoined,
-    activePopulation,
-    reserves: merged.initialReserve,
-    totalInflow: merged.initialTotalInflow,
-    totalPaidOut: 0,
-    claimedAccountValue: merged.initialClaimedAccountValue,
-    unpaidLiabilities: 0,
-    stress: 0,
-    distressMonths: 0,
-    recruitingMomentum: 1,
-    collapseRisk: 0,
-    lastNewParticipants: 0,
-    ended: false,
-    endReason: null,
-    events: ['The promoter starts with one apparent success story.'],
-  };
+  return Math.max(0, target + normal * target * spread);
 }
 
 export function normalizeConfig(config = {}) {
+  const kind = config.kind === SCHEME_KINDS.INVESTMENT ? SCHEME_KINDS.INVESTMENT : SCHEME_KINDS.RECRUITMENT;
+  const normalized = {
+    id: config.id ?? 'custom-recruitment',
+    name: config.name ?? (kind === SCHEME_KINDS.INVESTMENT ? 'Custom investment scheme' : 'Custom recruitment scheme'),
+    kind,
+    description: config.description ?? '',
+    historicalCaseId: config.historicalCaseId ?? null,
+    immutable: Boolean(config.immutable),
+    seed: number(config.seed, 42),
+    maxPeriods: integer(config.maxPeriods, 60),
+    initialParticipants: integer(config.initialParticipants, 1),
+    addressablePopulation: integer(config.addressablePopulation, 10_000_000),
+    initialReserve: number(config.initialReserve, 0),
+    initialTotalInflow: number(config.initialTotalInflow, 0),
+    initialClaimedAccountValue: number(config.initialClaimedAccountValue, 0),
+    growth: {
+      recruitsPerParticipant: number(config.growth?.recruitsPerParticipant, kind === SCHEME_KINDS.INVESTMENT ? 0.35 : 2.5),
+      recruitmentDecay: number(config.growth?.recruitmentDecay, 0.96),
+      churnRate: number(config.growth?.churnRate, 0.08),
+      churnSensitivity: number(config.growth?.churnSensitivity, 0.35),
+      marketFriction: number(config.growth?.marketFriction, 1.35),
+    },
+    investment: {
+      depositPerRecruit: number(config.investment?.depositPerRecruit, 5_000),
+      recurringDeposit: number(config.investment?.recurringDeposit, 0),
+      promisedReturnRate: number(config.investment?.promisedReturnRate, 0.12),
+      withdrawalRate: number(config.investment?.withdrawalRate, 0.05),
+      genuineRevenueRate: number(config.investment?.genuineRevenueRate, 0),
+      operatorSkimRate: number(config.investment?.operatorSkimRate, 0.08),
+    },
+    recruitment: {
+      joinFee: number(config.recruitment?.joinFee, 500),
+      recurringPurchase: number(config.recruitment?.recurringPurchase, 100),
+      retailSalesPerParticipant: number(config.recruitment?.retailSalesPerParticipant, 20),
+      retailMargin: number(config.recruitment?.retailMargin, 0.35),
+      refundRate: number(config.recruitment?.refundRate, 0.12),
+      productCostRate: number(config.recruitment?.productCostRate, 0.25),
+      operatorSkimRate: number(config.recruitment?.operatorSkimRate, 0.12),
+      commissionRules: (config.recruitment?.commissionRules ?? DEFAULT_COMMISSION_RULES).map(normalizeCommissionRule),
+      ranks: (config.recruitment?.ranks ?? DEFAULT_RANKS).map(normalizeRank),
+    },
+    shocks: (config.shocks ?? []).map((shock) => ({
+      period: integer(shock.period, 1),
+      label: shock.label ?? 'External pressure hits the scheme.',
+      recruitmentMultiplier: number(shock.recruitmentMultiplier, 1),
+      withdrawalMultiplier: number(shock.withdrawalMultiplier, 1),
+      churnAdd: number(shock.churnAdd, 0),
+      freeze: Boolean(shock.freeze),
+    })),
+    benchmarks: config.benchmarks ?? [],
+  };
+  validateConfig(normalized);
+  return normalized;
+}
+
+export function validateConfig(config) {
+  const errors = [];
+  const rates = [
+    ['growth churn rate', config.growth.churnRate],
+    ['growth churn sensitivity', config.growth.churnSensitivity],
+    ['investment promised return rate', config.investment.promisedReturnRate],
+    ['investment withdrawal rate', config.investment.withdrawalRate],
+    ['investment genuine revenue rate', config.investment.genuineRevenueRate],
+    ['investment operator skim rate', config.investment.operatorSkimRate],
+    ['recruitment retail margin', config.recruitment.retailMargin],
+    ['recruitment refund rate', config.recruitment.refundRate],
+    ['recruitment product cost rate', config.recruitment.productCostRate],
+    ['recruitment operator skim rate', config.recruitment.operatorSkimRate],
+  ];
+  rates.forEach(([label, value]) => {
+    if (!Number.isFinite(value) || value < 0 || value > 1) errors.push(`${label} must be between 0 and 1`);
+  });
+  if (config.growth.recruitsPerParticipant < 0) errors.push('recruits per participant cannot be negative');
+  if (config.growth.recruitmentDecay < 0 || config.growth.recruitmentDecay > 1) errors.push('recruitment decay must be between 0 and 1');
+  if (config.initialParticipants < 1) errors.push('initial participants must be at least 1');
+  if (config.addressablePopulation < config.initialParticipants) errors.push('addressable population must include initial participants');
+  if (config.maxPeriods < 1) errors.push('the simulation needs at least one period');
+
+  const moneyFields = [
+    config.initialReserve,
+    config.initialTotalInflow,
+    config.initialClaimedAccountValue,
+    config.investment.depositPerRecruit,
+    config.investment.recurringDeposit,
+    config.recruitment.joinFee,
+    config.recruitment.recurringPurchase,
+    config.recruitment.retailSalesPerParticipant,
+  ];
+  if (moneyFields.some((value) => !Number.isFinite(value) || value < 0)) errors.push('money values must be finite and non-negative');
+
+  const commissionTotals = new Map();
+  config.recruitment.commissionRules.forEach((rule) => {
+    if (rule.rate < 0 || rule.rate > 1) errors.push(`commission rate for ${rule.id} must be between 0 and 1`);
+    commissionTotals.set(rule.trigger, (commissionTotals.get(rule.trigger) ?? 0) + rule.rate);
+  });
+  commissionTotals.forEach((total, trigger) => {
+    if (total > 1 + Number.EPSILON) errors.push(`${trigger} commission rates cannot exceed 100%`);
+  });
+
+  let previous = { directRecruits: -1, activeDownline: -1, teamVolume: -1 };
+  config.recruitment.ranks.forEach((rank) => {
+    if (rank.directRecruits < previous.directRecruits || rank.activeDownline < previous.activeDownline || rank.teamVolume < previous.teamVolume) {
+      errors.push('rank requirements must be ordered from lowest to highest');
+    }
+    previous = rank;
+  });
+  if (errors.length) throw new Error(errors.join('; '));
+  return true;
+}
+
+export function createInitialState(config = {}) {
+  const normalized = normalizeConfig(config);
+  const initialRanks = calculateRankDistribution(
+    normalized.initialParticipants,
+    normalized.growth.recruitsPerParticipant,
+    normalized.recruitment.ranks,
+    normalized.recruitment.recurringPurchase,
+  );
   return {
-    id: config.id ?? 'custom',
-    name: config.name ?? 'Custom Scheme',
-    monthlyContribution: Number(config.monthlyContribution ?? 500),
-    targetRecruitsPerPerson: Number(config.targetRecruitsPerPerson ?? 3),
-    promisedReturnMonthly: Number(config.promisedReturnMonthly ?? 0.18),
-    withdrawalRate: Number(config.withdrawalRate ?? 0.08),
-    churnSensitivity: Number(config.churnSensitivity ?? 0.3),
-    initialReserve: Number(config.initialReserve ?? 0),
-    initialParticipants: Number(config.initialParticipants ?? 1),
-    initialLevels: Array.isArray(config.initialLevels) ? config.initialLevels.map(Number) : [],
-    initialActiveLevels: Array.isArray(config.initialActiveLevels) ? config.initialActiveLevels.map(Number) : [],
-    initialTotalInflow: Number(config.initialTotalInflow ?? 0),
-    initialClaimedAccountValue: Number(
-      config.initialClaimedAccountValue ?? config.initialReserve ?? config.initialTotalInflow ?? 0,
-    ),
-    maxMonths: Number(config.maxMonths ?? 84),
-    seed: Number(config.seed ?? 7),
-    recruitmentDecay: Number(config.recruitmentDecay ?? 0.97),
-    saturationMultiplier: Number(config.saturationMultiplier ?? 9),
-    worldPopulation: Number(config.worldPopulation ?? DEFAULT_LIMITS.worldPopulation),
-    globalMoneyCap: Number(config.globalMoneyCap ?? DEFAULT_LIMITS.globalMoneyCap),
-    maxLevels: Number(config.maxLevels ?? DEFAULT_LIMITS.maxLevels),
+    config: normalized,
+    period: 0,
+    month: 0,
+    levels: [normalized.initialParticipants],
+    cohorts: [{ period: 0, joined: normalized.initialParticipants, active: normalized.initialParticipants }],
+    activeParticipants: normalized.initialParticipants,
+    activePopulation: normalized.initialParticipants,
+    totalJoined: normalized.initialParticipants,
+    reserves: normalized.initialReserve,
+    claimedAccountValue: normalized.initialClaimedAccountValue,
+    totalInflow: normalized.initialTotalInflow,
+    ledger: { ...ZERO_LEDGER, participantPayments: normalized.initialTotalInflow },
+    periodLedger: { ...ZERO_LEDGER },
+    rankDistribution: initialRanks,
+    participantsWithNetLoss: normalized.initialParticipants,
+    profitableTopTierParticipants: 0,
+    moneyMovedToTop: 0,
+    stress: 0,
+    distressPeriods: 0,
+    distressMonths: 0,
+    collapseRisk: 0,
+    recruitingMomentum: 1,
+    lastNewParticipants: 0,
+    ended: false,
+    endReason: null,
+    collapseCause: null,
+    events: ['The first participants join and the promised rewards still look plausible.'],
   };
 }
 
 export function stepSimulation(previous, rng = Math.random) {
   if (previous.ended) return previous;
-
   const config = previous.config;
-  const month = previous.month + 1;
-  const activeLevels = [...previous.activeLevels];
-  const levels = [...previous.levels];
-  const activePopulation = activeLevels.reduce((sum, count) => sum + count, 0);
-  const marketSaturation = Math.min(1, previous.totalJoined / config.worldPopulation);
-  const fatigue = Math.pow(config.recruitmentDecay, month - 1);
-  const stressPenalty = Math.max(0.08, 1 - previous.stress * config.churnSensitivity);
-  const effectiveTarget =
-    config.targetRecruitsPerPerson * fatigue * stressPenalty * (1 - marketSaturation);
-
-  let newParticipants = 0;
-  activeLevels.forEach((count) => {
-    const cohorts = Math.min(count, 600);
-    const scale = count / cohorts;
-    for (let i = 0; i < cohorts; i += 1) {
-      newParticipants += Math.round(drawRecruitCount(effectiveTarget, rng) * scale);
-    }
-  });
-
-  const maxAvailable = Math.max(0, config.worldPopulation - previous.totalJoined);
-  newParticipants = Math.min(newParticipants, maxAvailable);
-
-  const recruitingMomentum =
-    previous.lastNewParticipants > 0 ? newParticipants / previous.lastNewParticipants : newParticipants > 0 ? 1 : 0;
-  const growthSlowdown = previous.month > 2 ? Math.max(0, 1 - recruitingMomentum) : 0;
-  const saturationPressure = Math.min(1, Math.pow(marketSaturation * config.saturationMultiplier, 1.35));
-  const confidencePressure = Math.min(1, previous.stress + growthSlowdown * 0.55 + saturationPressure * 0.35);
-  const requestedWithdrawalRate = Math.min(
-    0.88,
-    config.withdrawalRate * (1 + confidencePressure * 6 + previous.distressMonths * 0.2),
-  );
-  const statedValueBeforeWithdrawals =
-    previous.claimedAccountValue * (1 + config.promisedReturnMonthly) + newParticipants * config.monthlyContribution;
-  const promisedPayout =
-    previous.claimedAccountValue * config.promisedReturnMonthly * (0.25 + confidencePressure * 0.75);
-  const withdrawals = statedValueBeforeWithdrawals * requestedWithdrawalRate;
-  const inflow = newParticipants * config.monthlyContribution;
-  const due = promisedPayout + withdrawals;
-  const available = previous.reserves + inflow;
-  const paidOut = Math.min(available, due);
-  const shortfall = Math.max(0, due - available);
-  const reserves = Math.max(0, available - due);
-  const claimedAccountValue = Math.max(0, statedValueBeforeWithdrawals - paidOut);
-  const cashCoverage = available / Math.max(due, 1);
-  const distressSignal =
-    shortfall > 0 ||
-    growthSlowdown > 0.35 ||
-    saturationPressure > 0.2 ||
-    cashCoverage < 1.15 ||
-    requestedWithdrawalRate > config.withdrawalRate * 2.2;
-  const distressMonths = distressSignal ? previous.distressMonths + 1 : Math.max(0, previous.distressMonths - 1);
-  const stress = Math.min(
+  const period = previous.period + 1;
+  const shock = combinedShock(config.shocks.filter((item) => item.period === period));
+  const marketSaturation = previous.totalJoined / config.addressablePopulation;
+  const fatigue = Math.pow(config.growth.recruitmentDecay, period - 1);
+  const stressPenalty = Math.max(0.04, 1 - previous.stress * config.growth.churnSensitivity);
+  const marketPenalty = Math.max(0, 1 - Math.pow(Math.min(1, marketSaturation), config.growth.marketFriction));
+  const target = config.growth.recruitsPerParticipant * fatigue * stressPenalty * marketPenalty * shock.recruitmentMultiplier;
+  let newParticipants = Math.round(previous.activeParticipants * drawRecruitCount(target, rng));
+  newParticipants = Math.min(newParticipants, Math.max(0, config.addressablePopulation - previous.totalJoined));
+  const momentum = previous.lastNewParticipants > 0 ? newParticipants / previous.lastNewParticipants : newParticipants > 0 ? 1 : 0;
+  const slowdown = previous.period > 1 ? Math.max(0, 1 - momentum) : 0;
+  const churnRate = clamp(
+    config.growth.churnRate + previous.stress * config.growth.churnSensitivity + shock.churnAdd + slowdown * 0.08,
+    0,
     1,
-    previous.stress * 0.58 +
-      shortfall / Math.max(due, 1) * 0.72 +
-      growthSlowdown * 0.28 +
-      saturationPressure * 0.22 +
-      distressMonths * 0.045,
   );
-  const liabilityPressure = Math.min(1, claimedAccountValue / Math.max(previous.totalInflow + inflow + reserves, 1));
-  const collapseRisk = Math.min(
+  const churned = Math.min(previous.activeParticipants, Math.floor(previous.activeParticipants * churnRate));
+  const activeParticipants = Math.max(0, previous.activeParticipants - churned + newParticipants);
+  const rankDistribution = calculateRankDistribution(
+    activeParticipants,
+    target,
+    config.recruitment.ranks,
+    config.recruitment.recurringPurchase,
+  );
+
+  const periodResult =
+    config.kind === SCHEME_KINDS.INVESTMENT
+      ? investmentPeriod(previous, { period, newParticipants, activeParticipants, churned, slowdown, shock })
+      : recruitmentPeriod(previous, {
+          period,
+          newParticipants,
+          activeParticipants,
+          churned,
+          slowdown,
+          shock,
+          rankDistribution,
+        });
+
+  const cashCoverage = periodResult.availableCash / Math.max(periodResult.totalDue, 1);
+  const saturationPressure = clamp(marketSaturation * 1.5, 0, 1);
+  const shortfallRatio = periodResult.shortfall / Math.max(periodResult.totalDue, 1);
+  const distressSignal = shortfallRatio > 0.02 || slowdown > 0.35 || cashCoverage < 1.08 || shock.freeze;
+  const distressPeriods = distressSignal ? previous.distressPeriods + 1 : Math.max(0, previous.distressPeriods - 1);
+  const stress = clamp(
+    previous.stress * 0.54 + shortfallRatio * 0.82 + slowdown * 0.24 + saturationPressure * 0.2 + distressPeriods * 0.045,
+    0,
     1,
-    stress * 0.62 +
-      liabilityPressure * 0.18 +
-      growthSlowdown * 0.22 +
-      saturationPressure * 0.22 +
-      distressMonths * 0.055 +
-      shortfall / Math.max(claimedAccountValue, config.monthlyContribution * 700, 1),
   );
-  const churnRate = Math.min(0.72, stress * config.churnSensitivity + shortfall / Math.max(due, 1) * 0.35);
-  const retainedActiveLevels = activeLevels.map((count) => Math.max(0, Math.floor(count * (1 - churnRate))));
+  const liabilityRatio = periodResult.ledger.unpaidLiabilities / Math.max(periodResult.totalInflow, 1);
+  const collapseRisk = clamp(
+    stress * 0.55 + liabilityRatio * 0.35 + slowdown * 0.2 + saturationPressure * 0.16 + distressPeriods * 0.045,
+    0,
+    1,
+  );
 
-  if (newParticipants > 0) {
-    retainedActiveLevels.push(newParticipants);
-    levels.push(newParticipants);
-  }
-
-  while (retainedActiveLevels.length > config.maxLevels) {
-    retainedActiveLevels.shift();
-  }
+  const levels = newParticipants > 0 ? [...previous.levels, newParticipants] : [...previous.levels];
+  const cohorts = previous.cohorts
+    .map((cohort) => ({ ...cohort, active: Math.max(0, Math.round(cohort.active * (1 - churnRate))) }))
+    .concat(newParticipants > 0 ? [{ period, joined: newParticipants, active: newParticipants }] : []);
+  const averageStake = averageParticipantStake(config);
+  const participantPayouts = periodResult.ledger.withdrawalsPaid + periodResult.ledger.refundsPaid + periodResult.ledger.commissionsPaid;
+  const profitableParticipants = Math.min(previous.totalJoined + newParticipants, Math.floor(participantPayouts / Math.max(averageStake, 1)));
+  const topTierRank = config.recruitment.ranks.at(-1)?.id;
+  const profitableTopTierParticipants = config.kind === SCHEME_KINDS.RECRUITMENT ? rankDistribution[topTierRank] ?? 0 : 0;
 
   const next = {
     ...previous,
-    month,
+    period,
+    month: period,
     levels,
-    activeLevels: retainedActiveLevels,
+    cohorts,
+    activeParticipants,
+    activePopulation: activeParticipants,
     totalJoined: previous.totalJoined + newParticipants,
-    activePopulation: retainedActiveLevels.reduce((sum, count) => sum + count, 0),
-    reserves,
-    totalInflow: previous.totalInflow + inflow,
-    totalPaidOut: previous.totalPaidOut + paidOut,
-    claimedAccountValue,
-    unpaidLiabilities: previous.unpaidLiabilities + shortfall,
+    reserves: periodResult.reserves,
+    claimedAccountValue: periodResult.claimedAccountValue,
+    totalInflow: periodResult.totalInflow,
+    ledger: periodResult.ledger,
+    periodLedger: periodResult.periodLedger,
+    rankDistribution,
+    participantsWithNetLoss: Math.max(0, previous.totalJoined + newParticipants - profitableParticipants),
+    profitableTopTierParticipants,
+    moneyMovedToTop: periodResult.ledger.operatorTake + periodResult.ledger.commissionsPaid,
     stress,
-    distressMonths,
-    recruitingMomentum,
+    distressPeriods,
+    distressMonths: distressPeriods,
     collapseRisk,
+    recruitingMomentum: momentum,
     lastNewParticipants: newParticipants,
-    events: buildEvents(previous, {
-      month,
-      newParticipants,
-      shortfall,
-      stress,
-      churnRate,
-      growthSlowdown,
-      requestedWithdrawalRate,
-      inflow,
-      due,
-    }),
+    events: buildEvents(previous, { newParticipants, churned, slowdown, shortfall: periodResult.shortfall, shock, stress }),
   };
+  return applyEndConditions(next, shock);
+}
 
-  return applyEndConditions(next);
+function investmentPeriod(previous, context) {
+  const config = previous.config;
+  const terms = config.investment;
+  const newDeposits = context.newParticipants * terms.depositPerRecruit;
+  const recurringDeposits = previous.activeParticipants * terms.recurringDeposit;
+  const participantPayments = newDeposits + recurringDeposits;
+  const genuineRevenue = previous.reserves * terms.genuineRevenueRate;
+  const inflow = participantPayments + genuineRevenue;
+  const statedBeforeWithdrawals = previous.claimedAccountValue * (1 + terms.promisedReturnRate) + participantPayments;
+  const withdrawalDemand = statedBeforeWithdrawals * clamp(
+    terms.withdrawalRate * context.shock.withdrawalMultiplier * (1 + previous.stress * 4 + context.slowdown * 2),
+    0,
+    0.95,
+  );
+  const operatorDue = inflow * terms.operatorSkimRate;
+  const availableCash = previous.reserves + inflow;
+  const operatorTake = Math.min(availableCash, operatorDue);
+  const availableForParticipants = Math.max(0, availableCash - operatorTake);
+  const withdrawalsPaid = Math.min(availableForParticipants, withdrawalDemand);
+  const shortfall = Math.max(0, withdrawalDemand - withdrawalsPaid);
+  const reserves = Math.max(0, availableForParticipants - withdrawalsPaid);
+  const periodLedger = {
+    ...ZERO_LEDGER,
+    participantPayments,
+    genuineRevenue,
+    withdrawalsPaid,
+    operatorTake,
+    unpaidLiabilities: shortfall,
+  };
+  return {
+    availableCash,
+    totalDue: withdrawalDemand + operatorDue,
+    shortfall,
+    reserves,
+    claimedAccountValue: Math.max(0, statedBeforeWithdrawals - withdrawalsPaid),
+    totalInflow: previous.totalInflow + participantPayments + genuineRevenue,
+    periodLedger,
+    ledger: addLedgers(previous.ledger, periodLedger),
+  };
+}
+
+function recruitmentPeriod(previous, context) {
+  const config = previous.config;
+  const terms = config.recruitment;
+  const enrollment = context.newParticipants * terms.joinFee;
+  const purchases = previous.activeParticipants * terms.recurringPurchase;
+  const participantPayments = enrollment + purchases;
+  const retailRevenue = previous.activeParticipants * terms.retailSalesPerParticipant * terms.retailMargin;
+  const inflow = participantPayments + retailRevenue;
+  const triggerBases = {
+    enrollment,
+    'participant-purchase': purchases,
+    'retail-sale': retailRevenue,
+  };
+  const commissionsDue = calculateCommissionDue(triggerBases, terms.commissionRules, terms.ranks, context.rankDistribution, context.activeParticipants);
+  const priorRanks = previous.rankDistribution;
+  const rankBonuses = terms.ranks.reduce((sum, rank) => {
+    const promoted = Math.max(0, (context.rankDistribution[rank.id] ?? 0) - (priorRanks[rank.id] ?? 0));
+    return sum + promoted * rank.bonus;
+  }, 0);
+  const refundsDue = context.churned * (terms.joinFee + terms.recurringPurchase) * terms.refundRate;
+  const productCostsDue = (purchases + previous.activeParticipants * terms.retailSalesPerParticipant) * terms.productCostRate;
+  const operatorDue = inflow * terms.operatorSkimRate;
+  const availableCash = previous.reserves + inflow;
+  const operatorTake = Math.min(availableCash, operatorDue);
+  const distributable = Math.max(0, availableCash - operatorTake);
+  const participantDue = commissionsDue + rankBonuses + refundsDue + productCostsDue;
+  const paymentRatio = Math.min(1, distributable / Math.max(participantDue, 1));
+  const commissionsPaid = (commissionsDue + rankBonuses) * paymentRatio;
+  const refundsPaid = refundsDue * paymentRatio;
+  const productCosts = productCostsDue * paymentRatio;
+  const paid = commissionsPaid + refundsPaid + productCosts;
+  const shortfall = Math.max(0, participantDue - paid);
+  const reserves = Math.max(0, distributable - paid);
+  const periodLedger = {
+    ...ZERO_LEDGER,
+    participantPayments,
+    retailRevenue,
+    commissionsPaid,
+    refundsPaid,
+    productCosts,
+    operatorTake,
+    unpaidLiabilities: shortfall,
+  };
+  return {
+    availableCash,
+    totalDue: participantDue + operatorDue,
+    shortfall,
+    reserves,
+    claimedAccountValue: 0,
+    totalInflow: previous.totalInflow + participantPayments + retailRevenue,
+    periodLedger,
+    ledger: addLedgers(previous.ledger, periodLedger),
+  };
+}
+
+export function calculateCommissionDue(triggerBases, rules, ranks, rankDistribution, activeParticipants) {
+  const rankIndex = new Map(ranks.map((rank, index) => [rank.id, index]));
+  return rules.reduce((sum, rule) => {
+    const minimumIndex = rankIndex.get(rule.minRank) ?? 0;
+    const eligible = ranks.slice(minimumIndex).reduce((count, rank) => count + (rankDistribution[rank.id] ?? 0), 0);
+    const eligibility = activeParticipants > 0 ? eligible / activeParticipants : 0;
+    const multiplier = weightedRankMultiplier(ranks, rankDistribution, minimumIndex, eligible);
+    return sum + (triggerBases[rule.trigger] ?? 0) * rule.rate * eligibility * multiplier;
+  }, 0);
+}
+
+export function calculateRankDistribution(activeParticipants, effectiveRecruits, ranks, recurringPurchase) {
+  const distribution = Object.fromEntries(ranks.map((rank) => [rank.id, 0]));
+  let unassigned = Math.max(0, Math.floor(activeParticipants));
+  for (let index = ranks.length - 1; index >= 1; index -= 1) {
+    const rank = ranks[index];
+    const directFactor = rank.directRecruits === 0 ? 1 : clamp(effectiveRecruits / rank.directRecruits, 0, 1);
+    const modeledTeamSize = Math.pow(Math.max(1, effectiveRecruits + 1), index + 1);
+    const downlineFactor = rank.activeDownline === 0 ? 1 : clamp(modeledTeamSize / rank.activeDownline, 0, 1);
+    const modeledVolume = modeledTeamSize * recurringPurchase;
+    const volumeFactor = rank.teamVolume === 0 ? 1 : clamp(modeledVolume / rank.teamVolume, 0, 1);
+    const scarcity = Math.pow(0.22, index);
+    const qualified = Math.min(unassigned, Math.floor(activeParticipants * scarcity * directFactor * downlineFactor * volumeFactor));
+    distribution[rank.id] = qualified;
+    unassigned -= qualified;
+  }
+  distribution[ranks[0]?.id ?? 'bronze'] = unassigned;
+  return distribution;
 }
 
 export function levelRows(state) {
   let cumulative = 0;
   return state.levels.map((count, level) => {
     cumulative += count;
-    return {
-      level,
-      count,
-      cumulative,
-    };
+    return { level, count, cumulative };
   });
 }
 
-export function runSimulation(config, months = 24) {
-  const rng = createRng(normalizeConfig(config).seed);
-  const states = [createInitialState(config)];
-  for (let i = 0; i < months; i += 1) {
+export function runSimulation(config, periods = null) {
+  const normalized = normalizeConfig(config);
+  const rng = createRng(normalized.seed);
+  const states = [createInitialState(normalized)];
+  const limit = periods ?? normalized.maxPeriods;
+  for (let index = 0; index < limit; index += 1) {
     const next = stepSimulation(states.at(-1), rng);
     states.push(next);
     if (next.ended) break;
@@ -222,34 +474,44 @@ export function runSimulation(config, months = 24) {
   return states;
 }
 
-function applyEndConditions(state) {
-  const { config } = state;
-  if (state.totalJoined >= config.worldPopulation) {
-    return end(state, 'World population saturation', 'The model has recruited the available world population.');
+export function benchmarkResults(config, finalState) {
+  return config.benchmarks.map((benchmark) => {
+    const actual = valueAtPath(finalState, benchmark.path);
+    return {
+      ...benchmark,
+      actual,
+      passed: actual >= benchmark.min && actual <= benchmark.max,
+    };
+  });
+}
+
+export function cashConservationDelta(previous, next) {
+  const inflow = next.periodLedger.participantPayments + next.periodLedger.retailRevenue + next.periodLedger.genuineRevenue;
+  const outflow =
+    next.periodLedger.commissionsPaid +
+    next.periodLedger.withdrawalsPaid +
+    next.periodLedger.refundsPaid +
+    next.periodLedger.productCosts +
+    next.periodLedger.operatorTake;
+  return previous.reserves + inflow - outflow - next.reserves;
+}
+
+function applyEndConditions(state, shock) {
+  if (shock.freeze) return end(state, 'Regulatory intervention', shock.label);
+  if (state.totalJoined >= state.config.addressablePopulation) {
+    return end(state, 'Recruitment pool exhausted', 'The model has reached the addressable participant pool.');
   }
-  if (
-    state.activePopulation *
-      config.monthlyContribution *
-      config.promisedReturnMonthly *
-      (1 + state.stress) >=
-    config.globalMoneyCap
-  ) {
-    return end(state, 'Not enough money in the world', 'Promised payouts exceed the modeled global money cap.');
+  if (state.period > 2 && state.activeParticipants === 0) {
+    return end(state, 'Participation collapse', 'No active participants remain to bring in money or recruits.');
   }
-  if (state.unpaidLiabilities > config.monthlyContribution * 100_000 && state.stress > 0.85) {
-    return end(state, 'Operator flees', 'Unpaid liabilities are large enough that the promoter disappears.');
+  if (state.period > 3 && state.collapseRisk >= 0.94 && state.ledger.unpaidLiabilities > averageParticipantStake(state.config) * 100) {
+    return end(state, 'Liquidity collapse', 'Cash on hand can no longer cover participant claims and promised rewards.');
   }
-  if (state.month > 1 && state.activePopulation === 0 && state.unpaidLiabilities > 0) {
-    return end(state, 'Scheme collapse', 'Every active participant has left while unpaid obligations remain.');
+  if (state.period > 5 && state.distressPeriods >= 5 && state.collapseRisk >= 0.78) {
+    return end(state, 'Confidence collapse', 'Recruitment and confidence deteriorate faster than the scheme can recover.');
   }
-  if (state.month > 3 && state.collapseRisk > 0.92 && state.unpaidLiabilities > 0) {
-    return end(state, 'Scheme collapse', 'The cash shortfall becomes visible and redemption requests overwhelm inflows.');
-  }
-  if (state.month > 5 && state.distressMonths >= 5 && state.collapseRisk > 0.78) {
-    return end(state, 'Scheme collapse', 'Recruiting can no longer cover promised payouts, triggering exits.');
-  }
-  if (state.month >= config.maxMonths) {
-    return end(state, 'Scenario horizon reached', 'The scenario ended before the scheme fully collapsed.');
+  if (state.period >= state.config.maxPeriods) {
+    return end(state, 'Model horizon reached', 'The configured educational replay has reached its final period.');
   }
   return state;
 }
@@ -259,32 +521,86 @@ function end(state, reason, detail) {
     ...state,
     ended: true,
     endReason: reason,
-    events: [detail, ...state.events].slice(0, 6),
+    collapseCause: detail,
+    events: [detail, ...state.events].slice(0, 8),
   };
 }
 
 function buildEvents(previous, metrics) {
   const events = [];
-  if (metrics.newParticipants > previous.lastNewParticipants * 1.5 && metrics.newParticipants > 10) {
-    events.push('Recruiting surges as early payouts create false confidence.');
+  if (metrics.shock.label && (metrics.shock.freeze || metrics.shock.recruitmentMultiplier !== 1 || metrics.shock.withdrawalMultiplier !== 1)) {
+    events.push(metrics.shock.label);
   }
-  if (metrics.shortfall > 0) {
-    events.push('Incoming cash fails to cover promised withdrawals and returns.');
-  }
-  if (metrics.stress > 0.6) {
-    events.push('Participant confidence breaks and withdrawals accelerate.');
-  }
-  if (metrics.churnRate > 0.25) {
-    events.push('Large cohorts leave after missed or delayed payouts.');
-  }
-  if (metrics.growthSlowdown > 0.35) {
-    events.push('Recruiting momentum slows and confidence starts to crack.');
-  }
-  if (metrics.requestedWithdrawalRate > previous.config.withdrawalRate * 2.2) {
-    events.push('More participants try to cash out instead of rolling balances forward.');
-  }
-  if (metrics.inflow > metrics.due && metrics.newParticipants > 0) {
-    events.push('New money temporarily hides the insolvency.');
-  }
-  return [...events, ...previous.events].slice(0, 6);
+  if (metrics.newParticipants > Math.max(10, previous.lastNewParticipants * 1.35)) events.push('Recruiting accelerates as visible payouts create confidence.');
+  if (metrics.slowdown > 0.35) events.push('Recruitment momentum weakens and the required growth becomes harder to sustain.');
+  if (metrics.churned > previous.activeParticipants * 0.25) events.push('A large share of active participants leaves during this period.');
+  if (metrics.shortfall > 0) events.push('Available cash fails to cover participant claims and operating promises.');
+  if (metrics.stress > 0.65) events.push('Confidence is breaking and cash demands are accelerating.');
+  return [...events, ...previous.events].slice(0, 8);
+}
+
+function combinedShock(shocks) {
+  return shocks.reduce(
+    (combined, shock) => ({
+      label: combined.label ? `${combined.label} ${shock.label}` : shock.label,
+      recruitmentMultiplier: combined.recruitmentMultiplier * shock.recruitmentMultiplier,
+      withdrawalMultiplier: combined.withdrawalMultiplier * shock.withdrawalMultiplier,
+      churnAdd: combined.churnAdd + shock.churnAdd,
+      freeze: combined.freeze || shock.freeze,
+    }),
+    { label: '', recruitmentMultiplier: 1, withdrawalMultiplier: 1, churnAdd: 0, freeze: false },
+  );
+}
+
+function weightedRankMultiplier(ranks, distribution, minimumIndex, eligible) {
+  if (eligible === 0) return 1;
+  return ranks.slice(minimumIndex).reduce((sum, rank) => sum + (distribution[rank.id] ?? 0) * rank.commissionMultiplier, 0) / eligible;
+}
+
+function averageParticipantStake(config) {
+  if (config.kind === SCHEME_KINDS.INVESTMENT) return config.investment.depositPerRecruit + config.investment.recurringDeposit;
+  return config.recruitment.joinFee + config.recruitment.recurringPurchase * Math.min(config.maxPeriods, 6);
+}
+
+function addLedgers(a, b) {
+  return Object.fromEntries(Object.keys(ZERO_LEDGER).map((key) => [key, (a[key] ?? 0) + (b[key] ?? 0)]));
+}
+
+function normalizeCommissionRule(rule, index) {
+  return {
+    id: rule.id ?? `commission-${index + 1}`,
+    trigger: ['enrollment', 'participant-purchase', 'retail-sale'].includes(rule.trigger) ? rule.trigger : 'enrollment',
+    depth: integer(rule.depth, 1),
+    rate: number(rule.rate, 0),
+    minRank: rule.minRank ?? 'bronze',
+  };
+}
+
+function normalizeRank(rank, index) {
+  return {
+    id: rank.id ?? `rank-${index + 1}`,
+    name: rank.name ?? `Rank ${index + 1}`,
+    directRecruits: integer(rank.directRecruits, 0),
+    activeDownline: integer(rank.activeDownline, 0),
+    teamVolume: number(rank.teamVolume, 0),
+    commissionMultiplier: number(rank.commissionMultiplier, 1),
+    bonus: number(rank.bonus, 0),
+  };
+}
+
+function valueAtPath(value, path) {
+  return path.split('.').reduce((current, segment) => current?.[segment], value);
+}
+
+function number(value, fallback) {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function integer(value, fallback) {
+  return Math.max(0, Math.round(number(value, fallback)));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }

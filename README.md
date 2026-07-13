@@ -1,38 +1,52 @@
-![Ponzi Simulator](docs/readme-assets/ponzi-simulator-readme.webp)
-
 # Ponzi Simulator
 
-Ponzi Simulator is an educational Vite + React + Tailwind CSS app with a Phaser-powered game canvas. It models how recruitment-driven fraud appears to work early, then collapses when new money cannot cover promised returns and withdrawals.
+Ponzi Simulator is a responsive educational product for exploring how investment Ponzi schemes and recruitment-driven pyramid/MLM schemes move money, concentrate gains, and collapse. It combines a deterministic cohort simulator, accessible data visualizations, source-backed historical replays, a sortable Hall of Harm, and connected learning material.
 
-## Run
+The simulations are educational models, not instructions for operating a scheme or forensic reconstructions of historical cases.
+
+## Local development
 
 ```bash
-make up
+npm install
+npm run dev
 ```
 
-Open `http://localhost:5173/ponzi_simulator/`.
+Open `http://localhost:5173/`.
 
 ## Commands
 
 ```bash
-make up      # install dependencies if needed and start Vite
-make kill    # stop the Vite dev server
-make test    # run Vitest
-make build   # build production assets
-make deploy  # build and publish dist with gh-pages
+npm run test           # unit and component tests
+npm run test:coverage  # tests with coverage thresholds
+npm run test:e2e       # Chromium, Firefox, and WebKit browser tests
+npm run build          # production build plus deep-route fallback
+npm run check          # complete release gate
+npm run deploy         # gate, then publish dist to GitHub Pages
 ```
 
-## Gameplay
+Equivalent `make up`, `make test`, `make check`, `make build`, and `make deploy` targets are available.
 
-Use the Sandbox scenario to change the two main inputs:
+## Product areas
 
-- Monthly contribution
-- Target recruits per person
+- **Simulator** — choose investment Ponzi or pyramid/MLM mode; configure money flow, recruitment, commissions, ranks, shocks, and playback.
+- **Historical replays** — immutable factual baselines with editable “Make a copy” what-if variants and benchmark tolerances.
+- **Hall of Harm** — source-backed cases sortable by impact, money, recovery, dates, and duration, with URL-persisted filters.
+- **Case and learning pages** — linked explainers, case records, citations, methodology, and accessible chart alternatives.
 
-The simulator advances month by month. It shows level populations, cumulative population at or above each level, reserves, unpaid liabilities, money paid out, and collapse risk.
+## Model and data
 
-Historical watch-only scenarios are included for Charles Ponzi, Bernard Madoff, and Allen Stanford. They are simplified educational approximations, not forensic reconstructions.
+The seeded cohort engine uses discriminated investment and recruitment configurations. Every period records participant payments, retail revenue, commissions, withdrawals, refunds, product costs, operator take, reserves, and unpaid liabilities in a cash ledger. Validation covers configuration ranges, rank ordering, commission limits, finite populations, deterministic reproduction, and cash conservation.
 
-## Research Note
+Historical facts are stored separately from replay calibration. Unknown or disputed figures stay unset rather than being inferred. Each case links to its authoritative public sources.
 
-See [ponzi_scheme.md](./ponzi_scheme.md) for the background summary used to frame the model.
+## Quality gate
+
+`npm run check` must pass before deployment. It enforces:
+
+- unit and React component tests with coverage thresholds;
+- a production build and GitHub Pages deep-route fallback;
+- Playwright tests in Chromium, Firefox, and WebKit;
+- responsive checks from 320px through 1920px;
+- axe accessibility checks and Chromium visual-regression baselines.
+
+The production site is [ponzi.thefrenchartist.dev](https://ponzi.thefrenchartist.dev/).

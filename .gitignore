@@ -207,6 +207,9 @@ tempCodeRunnerFile.py
 node_modules/
 .vite.pid
 .vite.log
+coverage/
+playwright-report/
+test-results/
 
 # Ruff stuff:
 .ruff_cache/

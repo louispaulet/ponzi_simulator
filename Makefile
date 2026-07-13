@@ -1,7 +1,7 @@
 PID_FILE := .vite.pid
 SCREEN_NAME := ponzi_simulator_vite
 
-.PHONY: up kill test build deploy
+.PHONY: up kill test check build deploy
 
 up:
 	@if [ ! -d node_modules ]; then npm install; fi
@@ -28,6 +28,9 @@ kill:
 
 test:
 	npm test
+
+check:
+	npm run check
 
 build:
 	npm run build

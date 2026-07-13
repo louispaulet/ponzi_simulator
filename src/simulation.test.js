@@ -1,146 +1,314 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_RANKS,
+  SCHEME_KINDS,
+  benchmarkResults,
+  calculateCommissionDue,
+  calculateRankDistribution,
+  cashConservationDelta,
   createInitialState,
   createRng,
   drawRecruitCount,
   levelRows,
+  normalizeConfig,
   runSimulation,
   stepSimulation,
+  validateConfig,
 } from './simulation.js';
 import { scenarios } from './scenarios.js';
 
-describe('ponzi simulation', () => {
-  it('draws recruit counts around the target', () => {
+describe('configuration', () => {
+  it('normalizes a discriminated recruitment config', () => {
+    const config = normalizeConfig({ kind: SCHEME_KINDS.RECRUITMENT });
+    expect(config.kind).toBe(SCHEME_KINDS.RECRUITMENT);
+    expect(config.recruitment.ranks.map((rank) => rank.name)).toEqual(['Bronze', 'Silver', 'Gold', 'Platinum']);
+    expect(config.investment.depositPerRecruit).toBeGreaterThan(0);
+  });
+
+  it('normalizes a discriminated investment config', () => {
+    const config = normalizeConfig({ kind: SCHEME_KINDS.INVESTMENT, investment: { promisedReturnRate: 0.2 } });
+    expect(config.kind).toBe(SCHEME_KINDS.INVESTMENT);
+    expect(config.investment.promisedReturnRate).toBe(0.2);
+  });
+
+  it('applies safe fallbacks to malformed optional values', () => {
+    const config = normalizeConfig({
+      seed: 'not-a-number',
+      recruitment: {
+        commissionRules: [{ trigger: 'not-a-trigger' }],
+        ranks: [{}],
+      },
+    });
+    expect(config.seed).toBe(42);
+    expect(config.recruitment.commissionRules[0]).toMatchObject({ id: 'commission-1', trigger: 'enrollment' });
+    expect(config.recruitment.ranks[0]).toMatchObject({ id: 'rank-1', name: 'Rank 1' });
+  });
+
+  it('rejects commission totals above 100% for one trigger', () => {
+    expect(() =>
+      normalizeConfig({
+        recruitment: {
+          commissionRules: [
+            { trigger: 'enrollment', rate: 0.7 },
+            { trigger: 'enrollment', rate: 0.5 },
+          ],
+        },
+      }),
+    ).toThrow(/cannot exceed 100%/);
+  });
+
+  it('rejects ranks whose requirements decrease', () => {
+    expect(() =>
+      normalizeConfig({
+        recruitment: {
+          ranks: [
+            { id: 'base', directRecruits: 3, activeDownline: 20, teamVolume: 100 },
+            { id: 'top', directRecruits: 2, activeDownline: 10, teamVolume: 50 },
+          ],
+        },
+      }),
+    ).toThrow(/rank requirements/);
+  });
+
+  it('accepts the normalized default configuration', () => {
+    expect(validateConfig(normalizeConfig())).toBe(true);
+  });
+});
+
+describe('recruitment and compensation', () => {
+  it('draws a stable mean around the recruitment target', () => {
     const rng = createRng(123);
     const samples = Array.from({ length: 10_000 }, () => drawRecruitCount(4, rng));
     const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;
-    expect(mean).toBeGreaterThan(3.6);
-    expect(mean).toBeLessThan(4.4);
+    expect(mean).toBeGreaterThan(3.9);
+    expect(mean).toBeLessThan(4.1);
   });
 
-  it('tracks level counts and cumulative population at or above each level', () => {
-    const state = {
-      levels: [1, 3, 9, 27],
-    };
-    expect(levelRows(state)).toEqual([
-      { level: 0, count: 1, cumulative: 1 },
-      { level: 1, count: 3, cumulative: 4 },
-      { level: 2, count: 9, cumulative: 13 },
-      { level: 3, count: 27, cumulative: 40 },
-    ]);
+  it('draws no recruits when the target is zero', () => {
+    expect(drawRecruitCount(0, () => 0.5)).toBe(0);
   });
 
-  it('can start a historical scenario from a mature known scale', () => {
-    const initial = createInitialState({
-      initialLevels: [1, 4_800],
-      initialActiveLevels: [4_800],
-      initialTotalInflow: 19_500_000_000,
-      initialClaimedAccountValue: 64_800_000_000,
-      initialReserve: 1_000_000_000,
+  it('allocates every active participant to exactly one rank', () => {
+    const distribution = calculateRankDistribution(10_000, 4, DEFAULT_RANKS, 100);
+    expect(Object.values(distribution).reduce((sum, value) => sum + value, 0)).toBe(10_000);
+    expect(distribution.bronze).toBeGreaterThan(distribution.platinum);
+  });
+
+  it('respects commission triggers and rank eligibility', () => {
+    const amount = calculateCommissionDue(
+      { enrollment: 10_000, 'participant-purchase': 2_000, 'retail-sale': 500 },
+      [{ id: 'direct', trigger: 'enrollment', rate: 0.2, minRank: 'silver' }],
+      DEFAULT_RANKS,
+      { bronze: 50, silver: 30, gold: 15, platinum: 5 },
+      100,
+    );
+    expect(amount).toBeGreaterThan(900);
+    expect(amount).toBeLessThan(1_200);
+  });
+
+  it('pays no commission when no participant meets the minimum rank', () => {
+    expect(calculateCommissionDue(
+      { enrollment: 10_000 },
+      [{ id: 'top', trigger: 'enrollment', rate: 0.5, minRank: 'platinum' }],
+      DEFAULT_RANKS,
+      { bronze: 100, silver: 0, gold: 0, platinum: 0 },
+      100,
+    )).toBe(0);
+  });
+
+  it('treats omitted rank buckets as zero during commission weighting', () => {
+    expect(calculateCommissionDue(
+      { enrollment: 1_000 },
+      [{ id: 'all', trigger: 'enrollment', rate: 0.1, minRank: 'bronze' }],
+      DEFAULT_RANKS,
+      { bronze: 100 },
+      100,
+    )).toBe(100);
+  });
+
+  it('falls back safely for an unknown rule rank and trigger', () => {
+    expect(calculateCommissionDue(
+      {},
+      [{ id: 'unknown', trigger: 'missing', rate: 0.5, minRank: 'missing' }],
+      DEFAULT_RANKS,
+      { bronze: 1 },
+      1,
+    )).toBe(0);
+    expect(calculateRankDistribution(3, 0, [], 0)).toEqual({ bronze: 3 });
+  });
+});
+
+describe('simulation ledger', () => {
+  it('creates the initial state without confusing fictitious balances and cash', () => {
+    const state = createInitialState({
+      kind: SCHEME_KINDS.INVESTMENT,
+      initialReserve: 1_000,
+      initialTotalInflow: 5_000,
+      initialClaimedAccountValue: 20_000,
     });
-
-    expect(initial.totalJoined).toBe(4_801);
-    expect(initial.activePopulation).toBe(4_800);
-    expect(initial.totalInflow).toBe(19_500_000_000);
-    expect(initial.claimedAccountValue).toBe(64_800_000_000);
+    expect(state.reserves).toBe(1_000);
+    expect(state.totalInflow).toBe(5_000);
+    expect(state.claimedAccountValue).toBe(20_000);
   });
 
-  it('updates inflow and payout liabilities after one month', () => {
-    const rng = createRng(4);
-    const initial = createInitialState({
-      monthlyContribution: 100,
-      targetRecruitsPerPerson: 3,
-      promisedReturnMonthly: 0.2,
-      withdrawalRate: 0.1,
+  it('conserves cash in every recruitment period', () => {
+    const states = runSimulation({ kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 15, seed: 7 });
+    states.slice(1).forEach((state, index) => {
+      expect(Math.abs(cashConservationDelta(states[index], state))).toBeLessThan(0.001);
+    });
+  });
+
+  it('conserves cash in every investment period', () => {
+    const states = runSimulation({ kind: SCHEME_KINDS.INVESTMENT, maxPeriods: 15, seed: 11 });
+    states.slice(1).forEach((state, index) => {
+      expect(Math.abs(cashConservationDelta(states[index], state))).toBeLessThan(0.001);
+    });
+  });
+
+  it('tracks money moved upward separately from total inflow', () => {
+    const final = runSimulation({ kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 8, seed: 9 }).at(-1);
+    expect(final.moneyMovedToTop).toBe(final.ledger.operatorTake + final.ledger.commissionsPaid);
+    expect(final.moneyMovedToTop).toBeLessThanOrEqual(final.totalInflow + final.config.initialReserve);
+  });
+
+  it('safely adds a partially populated prior ledger', () => {
+    const initial = createInitialState({ maxPeriods: 2 });
+    initial.ledger = {};
+    const next = stepSimulation(initial, createRng(4));
+    expect(next.ledger.participantPayments).toBeGreaterThanOrEqual(0);
+    expect(next.ledger.genuineRevenue).toBe(0);
+  });
+
+  it('records participant losses and top-tier outcomes', () => {
+    const final = runSimulation({ kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 6, seed: 13 }).at(-1);
+    expect(final.participantsWithNetLoss).toBeGreaterThanOrEqual(0);
+    expect(final.participantsWithNetLoss).toBeLessThanOrEqual(final.totalJoined);
+    expect(final.profitableTopTierParticipants).toBeGreaterThanOrEqual(0);
+  });
+
+  it('is reproducible for a fixed seed', () => {
+    const config = { kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 12, seed: 991 };
+    const first = runSimulation(config).map(({ totalJoined, reserves, collapseRisk }) => ({ totalJoined, reserves, collapseRisk }));
+    const second = runSimulation(config).map(({ totalJoined, reserves, collapseRisk }) => ({ totalJoined, reserves, collapseRisk }));
+    expect(first).toEqual(second);
+  });
+
+  it('changes trajectory with a different seed', () => {
+    const first = runSimulation({ kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 8, seed: 1 }).at(-1);
+    const second = runSimulation({ kind: SCHEME_KINDS.RECRUITMENT, maxPeriods: 8, seed: 2 }).at(-1);
+    expect(first.totalJoined).not.toBe(second.totalJoined);
+  });
+
+  it('ends immediately when a scheduled intervention freezes the scheme', () => {
+    const states = runSimulation({
+      kind: SCHEME_KINDS.INVESTMENT,
+      maxPeriods: 12,
+      shocks: [{ period: 3, freeze: true, label: 'Authorities freeze the accounts.' }],
+    });
+    expect(states.at(-1).period).toBe(3);
+    expect(states.at(-1).endReason).toBe('Regulatory intervention');
+  });
+
+  it('combines simultaneous shocks and ignores a label-only event', () => {
+    const labelOnly = runSimulation({ maxPeriods: 1, shocks: [{ period: 1, label: 'Background news.' }] }).at(-1);
+    expect(labelOnly.events[0]).not.toBe('Background news.');
+
+    const combined = runSimulation({
+      maxPeriods: 3,
+      shocks: [
+        { period: 1, label: 'Recruitment slows.', recruitmentMultiplier: 0.5 },
+        { period: 1, label: 'Accounts are frozen.', freeze: true },
+      ],
+    }).at(-1);
+    expect(combined.endReason).toBe('Regulatory intervention');
+    expect(combined.collapseCause).toBe('Recruitment slows. Accounts are frozen.');
+  });
+
+  it('ends when the finite recruitment pool is exhausted', () => {
+    const final = runSimulation({
+      kind: SCHEME_KINDS.RECRUITMENT,
+      maxPeriods: 10,
+      initialParticipants: 1,
+      addressablePopulation: 2,
+      growth: { recruitsPerParticipant: 4, churnRate: 0, recruitmentDecay: 1 },
+    }).at(-1);
+    expect(final.endReason).toBe('Recruitment pool exhausted');
+  });
+
+  it('ends when every active participant leaves', () => {
+    const final = runSimulation({
+      kind: SCHEME_KINDS.RECRUITMENT,
+      maxPeriods: 10,
+      initialParticipants: 5,
+      growth: { recruitsPerParticipant: 0, churnRate: 1, recruitmentDecay: 1, churnSensitivity: 0 },
+    }).at(-1);
+    expect(final.endReason).toBe('Participation collapse');
+    expect(final.activeParticipants).toBe(0);
+  });
+
+  it('ends when cash can no longer cover accumulated claims', () => {
+    const final = runSimulation({
+      kind: SCHEME_KINDS.INVESTMENT,
+      maxPeriods: 20,
+      initialParticipants: 1,
       initialReserve: 0,
-    });
-    const next = stepSimulation(initial, rng);
-    expect(next.month).toBe(1);
-    expect(next.totalInflow).toBe(next.lastNewParticipants * 100);
-    expect(next.totalPaidOut + next.unpaidLiabilities).toBeGreaterThanOrEqual(0);
-    expect(next.totalJoined).toBe(1 + next.lastNewParticipants);
-  });
-
-  it('ends when the world population cap is reached', () => {
-    const states = runSimulation(
-      {
-        monthlyContribution: 100,
-        targetRecruitsPerPerson: 10,
-        promisedReturnMonthly: 0.05,
-        worldPopulation: 50,
-        maxMonths: 12,
-        seed: 88,
+      initialClaimedAccountValue: 1_000_000_000,
+      growth: { recruitsPerParticipant: 0, churnRate: 0, recruitmentDecay: 1 },
+      investment: {
+        depositPerRecruit: 1_000,
+        recurringDeposit: 0,
+        promisedReturnRate: 0.1,
+        withdrawalRate: 0.95,
+        genuineRevenueRate: 0,
+        operatorSkimRate: 0,
       },
-      12,
-    );
-    expect(states.at(-1).ended).toBe(true);
-    expect(states.at(-1).endReason).toBe('World population saturation');
+    }).at(-1);
+    expect(final.endReason).toBe('Liquidity collapse');
+    expect(final.ledger.unpaidLiabilities).toBeGreaterThan(1_000_000_000);
   });
 
-  it('ends when payout obligations exceed the modeled money cap', () => {
-    const next = stepSimulation(
-      createInitialState({
-        monthlyContribution: 1_000_000,
-        targetRecruitsPerPerson: 1,
-        promisedReturnMonthly: 10,
-        globalMoneyCap: 100,
-        seed: 3,
-      }),
-      createRng(3),
-    );
-    expect(next.ended).toBe(true);
-    expect(next.endReason).toBe('Not enough money in the world');
+  it('does not step an ended simulation twice', () => {
+    const final = runSimulation({ maxPeriods: 1 }).at(-1);
+    expect(stepSimulation(final, createRng(1))).toBe(final);
+  });
+});
+
+describe('cohorts and historical calibration', () => {
+  it('tracks cohort counts and cumulative population', () => {
+    const rows = levelRows({ levels: [1, 3, 9, 27] });
+    expect(rows.at(-1)).toEqual({ level: 3, count: 27, cumulative: 40 });
   });
 
-  it('eventually collapses when recruiting cannot cover promised payouts', () => {
-    const states = runSimulation(
-      {
-        monthlyContribution: 500,
-        targetRecruitsPerPerson: 0,
-        promisedReturnMonthly: 1.2,
-        withdrawalRate: 0.5,
-        maxMonths: 24,
-        seed: 10,
-      },
-      24,
-    );
-    expect(states.at(-1).ended).toBe(true);
-    expect(['Scheme collapse', 'Operator flees']).toContain(states.at(-1).endReason);
+  it('loads two sandbox modes and six source-backed replays', () => {
+    expect(scenarios.filter((scenario) => scenario.mode === 'interactive')).toHaveLength(2);
+    expect(scenarios.filter((scenario) => scenario.mode === 'historical')).toHaveLength(6);
   });
 
-  it('loads all historical and sandbox scenarios with valid parameters', () => {
-    expect(scenarios.length).toBeGreaterThanOrEqual(4);
-    scenarios.forEach((scenario) => {
-      expect(scenario.name).toBeTruthy();
-      expect(scenario.monthlyContribution).toBeGreaterThan(0);
-      expect(scenario.targetRecruitsPerPerson).toBeGreaterThanOrEqual(0);
-      expect(scenario.seed).toBeGreaterThan(0);
-    });
-  });
-
-  it('historical watch scenarios fail from collapse dynamics instead of just reaching the horizon', () => {
+  it('keeps every historical replay within its declared benchmark ranges', () => {
     scenarios
-      .filter((scenario) => scenario.mode === 'watch')
+      .filter((scenario) => scenario.mode === 'historical')
       .forEach((scenario) => {
-        const states = runSimulation(scenario, 120);
-        const final = states.at(-1);
-        const maxRisk = Math.max(...states.map((state) => state.collapseRisk));
-        const distinctRiskScores = new Set(states.map((state) => state.collapseRisk.toFixed(2)));
-
-        expect(final.endReason).not.toBe('Scenario horizon reached');
-        expect(maxRisk).toBeGreaterThan(0.75);
-        expect(distinctRiskScores.size).toBeGreaterThan(2);
-        expect([...distinctRiskScores]).not.toEqual(['0.40']);
+        const final = runSimulation(scenario).at(-1);
+        const results = benchmarkResults(final.config, final);
+        expect(results, scenario.id).not.toHaveLength(0);
+        expect(results.every((result) => result.passed), scenario.id).toBe(true);
+        expect(final.endReason).toBe('Regulatory intervention');
       });
   });
 
-  it('keeps the Madoff scenario in historical billions, not synthetic trillions', () => {
-    const madoff = scenarios.find((scenario) => scenario.id === 'madoff');
-    const final = runSimulation(madoff, 24).at(-1);
+  it('keeps Stanford at the documented billions scale instead of synthetic trillions', () => {
+    const scenario = scenarios.find((item) => item.id === 'stanford');
+    const final = runSimulation(scenario).at(-1);
+    expect(final.totalInflow).toBeGreaterThanOrEqual(7_000_000_000);
+    expect(final.totalInflow).toBeLessThan(8_000_000_000);
+    expect(final.totalJoined).toBeLessThan(50_000);
+  });
 
-    expect(final.endReason).toBe('Scheme collapse');
-    expect(final.totalInflow).toBeLessThan(30_000_000_000);
-    expect(final.claimedAccountValue).toBeLessThan(90_000_000_000);
-    expect(final.totalJoined).toBeLessThanOrEqual(40_930);
+  it('marks an unresolved benchmark path as outside its range', () => {
+    const final = runSimulation({ maxPeriods: 1 }).at(-1);
+    expect(benchmarkResults({ benchmarks: [{ id: 'missing', path: 'does.not.exist', min: 1, max: 2 }] }, final)[0]).toMatchObject({
+      actual: undefined,
+      passed: false,
+    });
   });
 });
