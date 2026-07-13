@@ -178,7 +178,7 @@ input[type="text"], input[type="number"] { width: 100%; padding: 0 12px; }
 .leaderboard-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: white; }
 .leaderboard-table { width: 100%; min-width: 1380px; border-collapse: collapse; font-size: 12px; }
 .leaderboard-table th, .leaderboard-table td { padding: 18px 13px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.leaderboard-table thead th { position: sticky; top: 72px; z-index: 2; background: #f8f9fc; color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.leaderboard-table thead th { position: sticky; top: 0; z-index: 2; background: #f8f9fc; color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .leaderboard-table thead button { border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font-size: inherit; font-weight: 850; text-align: left; text-transform: inherit; }
 .leaderboard-table tbody tr:hover { background: #fbfcff; }
 .leaderboard-table tbody th { min-width: 190px; font-size: 14px; }

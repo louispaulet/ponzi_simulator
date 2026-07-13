@@ -53,6 +53,18 @@ test('leaderboard sorting, filtering, deep links, and keyboard focus work', asyn
   await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused();
 });
 
+test('leaderboard header does not obscure the first-ranked case', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/hall-of-harm');
+
+  const headerBox = await page.getByRole('columnheader', { name: 'Case' }).boundingBox();
+  const firstRowBox = await page.locator('.leaderboard-table tbody tr').first().boundingBox();
+
+  expect(headerBox).not.toBeNull();
+  expect(firstRowBox).not.toBeNull();
+  expect(firstRowBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height - 1);
+});
+
 test('key routes have no automatically detectable WCAG A or AA violations', async ({ page }) => {
   for (const path of ['/', '/simulator?scenario=custom-recruitment', '/hall-of-harm', '/learn/mlm', '/methodology']) {
     await page.goto(path);
